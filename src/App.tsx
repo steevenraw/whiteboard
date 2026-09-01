@@ -50,6 +50,7 @@ import { subscribe, unsubscribe } from '@nextcloud/event-bus'
 import { useComment } from './hooks/useComment'
 import { CommentSidebar } from './components/CommentSidebar'
 import { useEmojiPicker } from './hooks/useEmojiPicker'
+import { useQuickTools } from './hooks/useQuickTools'
 import { VotingSidebar } from './components/VotingSidebar'
 import { useVoting } from './hooks/useVoting'
 import { useContextMenuFilter } from './hooks/useContextMenuFilter'
@@ -212,6 +213,16 @@ export default function App({
 			setIsTimerPinned(true)
 		}
 	}, [isTimerVisible, isTimerActive])
+
+	// Panier A (01/09) : promeut vote/minuteur/présentation/enregistrement en
+	// icônes de barre d'outils visibles + ajoute l'outil post-it en un clic —
+	// voir hooks/useQuickTools.tsx pour le détail. Ne remplace pas le menu ☰
+	// existant (ExcalidrawMenu), les deux cohabitent.
+	const { renderQuickTools } = useQuickTools({
+		onToggleTimer: handleToggleTimer,
+		startPresentation: presentationState.startPresentation,
+		startRecording: recordingState.startRecording,
+	})
 
 	// Voting
 	const { startVoting, vote, endVoting } = useVoting()
@@ -385,6 +396,7 @@ export default function App({
 			renderAssistant()
 			renderComment()
 			renderEmojiPicker()
+			renderQuickTools()
 		}
 
 		renderCustomElements()
@@ -396,7 +408,7 @@ export default function App({
 		observer.observe(excalidrawElement, { attributes: true, attributeFilter: ['class'] })
 
 		return () => observer.disconnect()
-	}, [updateLang, renderSmartPicker, renderAssistant, renderComment, renderEmojiPicker, renderTable])
+	}, [updateLang, renderSmartPicker, renderAssistant, renderComment, renderEmojiPicker, renderTable, renderQuickTools])
 
 	const onLibraryChange = useCallback(async (items: LibraryItems) => {
 		if (!isLibraryLoaded) {
