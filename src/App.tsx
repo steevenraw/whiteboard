@@ -21,6 +21,7 @@ import { useTableInsertion } from './hooks/useTableInsertion'
 import { useReadOnlyState } from './hooks/useReadOnlyState'
 import { ExcalidrawMenu } from './components/ExcalidrawMenu'
 import Embeddable from './components/Embeddable'
+import RichStickyNote from './components/RichStickyNote'
 import { useLangStore } from './stores/useLangStore'
 import { NetworkStatusIndicator } from './components/NetworkStatusIndicator'
 import { AuthErrorNotification } from './components/AuthErrorNotification'
@@ -525,6 +526,16 @@ export default function App({
 		return el
 	}
 
+	// Panier B (01/09) : distingue le post-it à texte riche (rendu DOM
+	// custom, voir RichStickyNote.tsx) des embeddables existants (cartes de
+	// référence Nextcloud, Embeddable.tsx) — les deux partagent le même
+	// point d'extension `renderEmbeddable`, différenciés par customData.
+	const renderEmbeddableElement = (element: any) => (
+		element?.customData?.whiteboardNoteType === 'rich-sticky'
+			? <RichStickyNote element={element} />
+			: <Embeddable link={element?.link} />
+	)
+
 	return (
 		<div className={appClassName} style={{ display: 'flex', flexDirection: 'column' }}>
 			<div className="excalidraw-wrapper" style={{ flex: 1, height: '100%', position: 'relative' }}>
@@ -541,7 +552,7 @@ export default function App({
 				)}
 				<Excalidraw
 					validateEmbeddable={() => true}
-					renderEmbeddable={Embeddable}
+					renderEmbeddable={renderEmbeddableElement}
 					beforeElementCreated={beforeElementCreated}
 					excalidrawAPI={setExcalidrawAPI}
 					initialData={initialDataPromise}

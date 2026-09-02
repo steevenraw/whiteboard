@@ -8,11 +8,13 @@
  * barre d'outils principale, sans les retirer du menu (les deux chemins
  * cohabitent, comme le raccourci clavier et le menu pour l'export).
  *
- * On ajoute aussi un outil "Post-it" en un clic : crée directement un
- * rectangle + texte lié (pattern déjà utilisé par convertToExcalidrawElements)
- * au centre de la vue, sélectionné pour que le panneau de propriétés natif
- * d'Excalidraw (couleur, taille) s'ouvre immédiatement — évite le
- * dessiner-puis-taper-puis-colorer en plusieurs étapes.
+ * Panier B (01/09) : le post-it crée désormais un élément "embeddable" (pas
+ * rectangle+texte) — seul moyen d'obtenir du texte riche (gras/souligné/
+ * couleur sur sélection), impossible sur un élément texte natif Excalidraw
+ * (voir RichStickyNote.tsx et la mémoire du chantier pour le détail/preuves).
+ * Compromis accepté par le user : ce post-it n'apparaît pas dans l'export
+ * image natif (limitation d'Excalidraw sur tout embeddable, pas spécifique
+ * à ce patch).
  */
 import { useCallback } from 'react'
 import { useShallow } from 'zustand/react/shallow'
@@ -23,9 +25,9 @@ import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types/types
 import { useExcalidrawStore } from '../stores/useExcalidrawStore'
 import { renderToolbarButton } from '../components/ToolbarButton'
 import { getViewportCenterPoint } from '../utils/positionElementsAtViewport'
+import { NOTE_SIZES } from '../components/RichStickyNote'
 
-const STICKY_WIDTH = 190
-const STICKY_HEIGHT = 136
+const DEFAULT_SIZE = NOTE_SIZES.s
 
 interface QuickToolsOptions {
 	onToggleTimer: () => void
@@ -49,30 +51,57 @@ export function useQuickTools({ onToggleTimer, startPresentation, startRecording
 		const center = getViewportCenterPoint()
 		const sceneCoords = viewportCoordsToSceneCoords(center, excalidrawAPI.getAppState())
 
+		// convertToExcalidrawElements ne semble pas initialiser complètement
+		// le type "embeddable" (crash "Cannot read properties of undefined
+		// (reading 'length')" constaté en test, y compris avec `link` fourni
+		// — non documenté dans les exemples officiels, contrairement à
+		// rectangle/ellipse/texte). Contournement : on convertit un
+		// RECTANGLE (tous les champs de base garantis correctement
+		// initialisés), puis on bascule son `type` après coup — même
+		// technique que pour customData ci-dessous (perdu par le
+		// convertisseur, bug excalidraw/excalidraw#7654, réécrit après coup).
+		// Fond et contour transparents : sans ça, Excalidraw dessine encore le
+		// rectangle d'origine (nativement, sur le canevas) SOUS notre rendu
+		// DOM (RichStickyNote) — double affichage constaté par le user
+		// (bordure de couleur superflue autour de la note). Un seul rendu
+		// visible doit rester : le nôtre.
 		const newElements = convertToExcalidrawElements([{
 			type: 'rectangle',
-			x: sceneCoords.x - STICKY_WIDTH / 2,
-			y: sceneCoords.y - STICKY_HEIGHT / 2,
-			width: STICKY_WIDTH,
-			height: STICKY_HEIGHT,
-			backgroundColor: '#ffec99',
-			strokeColor: '#1e1e1e',
-			fillStyle: 'solid',
-			roundness: { type: 3 },
-			label: {
-				text: t('whiteboard', 'New idea'),
-				fontSize: 20,
-			},
+			x: sceneCoords.x - DEFAULT_SIZE.w / 2,
+			y: sceneCoords.y - DEFAULT_SIZE.h / 2,
+			width: DEFAULT_SIZE.w,
+			height: DEFAULT_SIZE.h,
+			backgroundColor: 'transparent',
+			strokeColor: 'transparent',
+			strokeWidth: 0,
 		}])
 
+		const note = {
+			...newElements[0],
+			type: 'embeddable' as const,
+			// `link` RESTAURÉ après test : sans lui, Excalidraw n'appelle même
+			// pas renderEmbeddable et affiche son propre placeholder générique
+			// "Empty Web-Embed" — confirmé en direct. Le crash initial, lui,
+			// venait bien de la conversion (rectangle ci-dessus), pas de
+			// l'absence de link — mais link reste nécessaire pour une autre
+			// raison. L'infobulle de lien affichée au clic est un coût
+			// résiduel accepté de ce contournement.
+			link: 'whiteboard-note://rich-sticky',
+			customData: {
+				whiteboardNoteType: 'rich-sticky',
+				html: t('whiteboard', 'New idea'),
+				color: 'canary',
+			},
+		}
+
 		const elements = excalidrawAPI.getSceneElementsIncludingDeleted().slice()
-		elements.push(...newElements)
+		elements.push(note)
 
 		excalidrawAPI.updateScene({
 			elements,
 			appState: {
 				...excalidrawAPI.getAppState(),
-				selectedElementIds: { [newElements[0].id]: true },
+				selectedElementIds: { [note.id]: true },
 			},
 		})
 	}, [excalidrawAPI])
