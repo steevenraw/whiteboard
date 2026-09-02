@@ -9,6 +9,119 @@
 
 The official whiteboard app for Nextcloud. Create and share whiteboards with real-time collaboration.
 
+---
+
+## À propos de ce fork
+
+Ce dépôt est un **fork personnel patché** de [`nextcloud/whiteboard`](https://github.com/nextcloud/whiteboard),
+basé sur le tag `v1.5.9`. Il ajoute des fonctionnalités inspirées de Miro que
+l'app officielle n'a pas nativement. Le code patché vit sur la branche
+[`patch/miro-features`](https://github.com/steevenraw/whiteboard/tree/patch/miro-features)
+(la branche `main` reste un miroir identique de l'amont, ne pas y toucher).
+
+### Ce qui est patché
+
+**Panier A** — sans risque, s'appuie uniquement sur des API publiques d'Excalidraw déjà utilisées ailleurs dans le code :
+- Traductions françaises complétées (Vote, Minuteur, Grille, Recherche de texte — restées en anglais dans l'app officielle).
+- Vote / Minuteur / Présentation / Enregistrement promus en icônes visibles dans la barre d'outils principale (auparavant cachés dans le menu ☰ ; les deux chemins cohabitent).
+- Post-it en un clic (rectangle + texte lié, natif Excalidraw).
+
+**Panier B** — plus profond, ajoute un vrai composant React (`src/components/RichStickyNote.tsx`) :
+- Le post-it devient un élément *embeddable* rendu comme un vrai `<div contenteditable>` DOM (pas un élément texte natif Excalidraw — celui-ci n'a pas de notion de segments stylés, gras/souligné sur une sélection partielle est structurellement impossible dessus).
+- Mise en forme sur sélection : gras, souligné, taille agrandie, couleur de texte.
+- Taille (S/M/L) et couleur de fond (8 couleurs) du post-it, via une mini-barre d'outils custom (les embeddables n'ont pas accès au panneau de propriétés natif d'Excalidraw).
+
+**Compromis assumé** : un post-it "riche" (panier B) n'apparaît PAS dans l'export
+image natif d'Excalidraw ("Exporter l'image…", capture d'écran) — Excalidraw
+remplace tout élément embeddable par un placeholder générique à l'export,
+comportement natif non contournable sans réécrire son pipeline d'export.
+Solution de repli : capture d'écran du navigateur.
+
+### Fichiers modifiés
+
+| Fichier | Rôle |
+|---|---|
+| `src/hooks/useQuickTools.tsx` | Nouveau : boutons de la barre d'outils rapide (post-it, vote, minuteur, présentation, enregistrement) |
+| `src/components/RichStickyNote.tsx` | Nouveau : rendu DOM du post-it à texte riche (panier B) |
+| `src/App.tsx` | Distingue le post-it riche (`customData.whiteboardNoteType`) des embeddables existants (cartes de référence Nextcloud) sur le même point d'extension `renderEmbeddable` |
+| `l10n/fr.json`, `l10n/fr.js` | Traductions françaises complétées |
+
+### Piège technique à retenir (barres flottantes)
+
+Les barres flottantes du post-it riche (formatage, taille/couleur) sont
+rendues via `createPortal()` — **jamais vers `document.body`**. Deux raisons,
+documentées en commentaire dans `RichStickyNote.tsx` :
+1. La note et le conteneur embeddable natif d'Excalidraw ont chacun leur
+   propre `overflow:hidden` : toute barre positionnée pour dépasser de la
+   note (au-dessus) est rognée si elle reste dans cet arbre.
+2. React 18 délègue ses événements sur le conteneur racine passé à
+   `createRoot()`, pas sur `document`. Si le portail cible `document.body`
+   (un ANCÊTRE de ce conteneur, pas un descendant), les clics natifs ne
+   traversent jamais le conteneur racine — React ne les voit jamais, le
+   bouton reste géométriquement correct mais totalement inerte. Piège
+   invisible en lecture de code, uniquement détectable en testant un clic
+   réel de bout en bout.
+
+La fonction `findPortalTarget()` cible le parent du wrapper Excalidraw
+(`.App`) — à la fois dans l'arbre React (délégation OK) et au-dessus des
+`overflow:hidden` (affichage/clic OK).
+
+### Build & déploiement (sur un serveur Unraid, conteneur linuxserver)
+
+```bash
+# 1. Build (conteneur Node.js, ~1 min)
+docker run --rm -v /chemin/vers/ce/depot:/build -w /build node:24 npm run build
+
+# 2. Backup de l'app en prod AVANT tout déploiement
+tar -czf whiteboard-backup-$(date +%Y%m%d-%H%M%S).tar.gz -C /chemin/app/prod .
+
+# 3. Déployer UNIQUEMENT les dossiers régénérés par le build
+#    (ne pas toucher lib/, vendor/, appinfo/, img/, templates/)
+rm -rf /chemin/app/prod/{js,dist}
+cp -r js dist /chemin/app/prod/
+chown -R 1000:1000 /chemin/app/prod/{js,dist}
+```
+
+**Piège de cache** : `whiteboard-main.mjs` (point d'entrée) et `l10n/*.js`/`*.json`
+ont un nom de fichier stable (pas de hash de contenu comme les autres chunks
+Vite) — un cache navigateur ou CDN en façade peut servir une version périmée
+même après déploiement réel. Toujours vérifier avec un rechargement forcé
+(Ctrl+Shift+R) dans un nouvel onglet.
+
+Le serveur websocket temps réel (`nextcloud-whiteboard-server`, image
+`ghcr.io/nextcloud-releases/whiteboard:stable`) est un déploiement séparé,
+non concerné par ce patch (c'est le backend collab, pas le frontend Excalidraw).
+
+### Gérer les mises à jour amont
+
+Ce fork ne suit PAS automatiquement `nextcloud/whiteboard` — pas d'obligation
+de récupérer chaque nouvelle version. Mettre à jour seulement si une raison
+concrète apparaît (faille de sécurité, fonctionnalité upstream réellement
+voulue). Marche à suivre le moment venu :
+
+1. Récupérer l'amont : bouton **"Sync fork"** sur la branche `main` de ce
+   dépôt GitHub (ou `git fetch upstream` si l'amont est ajouté comme remote
+   en local), pour que `main` reste un miroir à jour de `nextcloud/whiteboard`.
+2. Sur `patch/miro-features` : `git merge main` (pas de rebase — cette
+   branche est déjà poussée sur GitHub, un rebase forcerait un
+   force-push sans bénéfice réel pour un fork à un seul contributeur).
+3. Résoudre les conflits attendus, par ordre de risque :
+   - `l10n/fr.json` / `l10n/fr.js` — le plus probable (le bot Transifex
+     amont les régénère à chaque release). Réappliquer les clés custom
+     de ce fork si écrasées (liste dans le commit "Panier A").
+   - `src/App.tsx` — diff minuscule (1 import, 1 fonction, 1 prop), conflit
+     peu probable et facile à relire à la main si ça arrive.
+   - `src/hooks/useQuickTools.tsx`, `src/components/RichStickyNote.tsx` —
+     fichiers propres à ce fork, aucun risque de conflit sauf si l'amont
+     crée un fichier de même nom (très improbable).
+4. Rebuild + redéployer (voir section précédente) après résolution.
+5. Tester en conditions réelles avant de considérer la mise à jour terminée
+   (créer un post-it, vérifier gras/souligné/taille/couleur) — les bugs de
+   ce patch sont du genre qui ne se voit qu'à l'usage réel, pas à la lecture
+   du code (barres flottantes invisibles, clics morts).
+
+---
+
 ## Features
 
 - 🎨 Drawing shapes, writing text, connecting elements
