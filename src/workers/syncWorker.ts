@@ -84,6 +84,17 @@ const handleSyncToLocal = async (data: SyncToLocalMessage) => {
 	}
 }
 
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+// Le verrou distribué côté serveur (WhiteboardController::update, TTL 5s) répond 409 quand
+// deux sauvegardes se chevauchent de quelques centaines de ms — un accroc passager, pas un
+// vrai désaccord de contenu. Avant ce correctif, un 409 était traité comme un succès déguisé
+// (voir chantier_bug_whiteboard_sync_local_only) : hasPendingLocalChanges n'était jamais remis
+// à false, mais rien ne redéclenchait non plus d'essai — si aucune autre édition ne survenait,
+// la sauvegarde restait bloquée en local indéfiniment. On réessaie donc quelques fois avant
+// d'abandonner pour de vrai.
+const CONFLICT_RETRY_DELAYS_MS = [1000, 2000]
+
 const handleSyncToServer = async (data: SyncToServerMessage) => {
 	const { fileId, url, jwt, elements, files } = data
 
@@ -104,22 +115,21 @@ const handleSyncToServer = async (data: SyncToServerMessage) => {
 			'X-Requested-With': 'XMLHttpRequest',
 			Authorization: `Bearer ${jwt}`,
 		}
-
-		const response = await globalThis.fetch(url, {
-			method: 'PUT',
-			headers,
-			body: JSON.stringify({
-				data: { elements, files: files || {} },
-			}),
+		const body = JSON.stringify({
+			data: { elements, files: files || {} },
 		})
+
+		let response = await globalThis.fetch(url, { method: 'PUT', headers, body })
+
+		for (let attempt = 0; response.status === 409 && attempt < CONFLICT_RETRY_DELAYS_MS.length; attempt++) {
+			await sleep(CONFLICT_RETRY_DELAYS_MS[attempt])
+			response = await globalThis.fetch(url, { method: 'PUT', headers, body })
+		}
 
 		if (response.status === 409) {
 			sendMessage({
-				type: 'SERVER_SYNC_COMPLETE',
-				success: true,
-				skipped: true,
-				duration: 0,
-				elementsCount: elements?.length ?? 0,
+				type: 'SERVER_SYNC_ERROR',
+				error: 'Server sync conflict persisted after retries (409) — will retry on next change.',
 			})
 			return
 		}
