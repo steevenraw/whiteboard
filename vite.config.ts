@@ -34,9 +34,6 @@ const AppConfig = createAppConfig({
 			target: 'es2020',
 			rollupOptions: {
 				output: {
-					manualChunks: {
-						vendor: ['react', 'react-dom'],
-					},
 					// assetFileNames: 'js/[name]-[hash].[ext]',
 				},
 			},
