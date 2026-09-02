@@ -462,8 +462,18 @@ export function useSync() {
 	const cachedStateRef = useRef<{ elements: readonly ExcalidrawElement[]; files: BinaryFiles }>({ elements: [], files: {} as BinaryFiles })
 
 	// Direct sync when leaving - synchronous to ensure it completes
+	//
+	// Deliberately NOT gated on isSyncerRef: the periodic autosave (doSyncToServerAPI)
+	// IS gated on isDedicatedSyncer to avoid every connected client hammering the API with
+	// redundant saves. But that means if this client is never elected syncer (or the
+	// collaboration socket never settles on 'online'), routine saves never happen either —
+	// and this final safety net was the only other line of defense, gated the same way. In
+	// practice that left edits stuck in IndexedDB forever with no visible error (see
+	// chantier_bug_whiteboard_sync_local_only). A same-content PUT from a non-syncer client on
+	// unload is harmless (idempotent, server-side lock already serializes concurrent writes) —
+	// far cheaper than silently losing someone's work.
 	const doFinalServerSync = useCallback(() => {
-		if (!fileId || !isSyncerRef.current) {
+		if (!fileId) {
 			return
 		}
 
