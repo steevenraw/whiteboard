@@ -750,12 +750,15 @@ export function useCollaboration() {
 				setStatus('online')
 				setIsInRoom(false) // not joined yet
 
-				// Only clear auth errors if this was not a JWT secret mismatch
-				// JWT secret mismatch is a persistent configuration issue that won't be resolved by connection success
-				const { authError } = useCollaborationStore.getState()
-				if (authError.type !== 'jwt_secret_mismatch') {
-					clearAuthError()
-				}
+				// A 'connect' event only fires after the server has ACCEPTED this socket's
+				// JWT — so whatever auth error was flagged before (even a "persistent" one)
+				// is stale by definition. The previous code kept 'jwt_secret_mismatch' errors
+				// displayed forever on the theory that a real secret mismatch can't self-heal,
+				// but that meant a handful of transient failures (e.g. overlapping reconnects
+				// during a page reload) would leave the "Authentication Configuration Issue"
+				// banner stuck even while collaboration kept working normally underneath — the
+				// error state had no way back to reality. Always trust a successful connect.
+				clearAuthError()
 
 				// Reset room join tracking on new connection
 				joinedRoomRef.current = null
@@ -792,11 +795,8 @@ export function useCollaboration() {
 				setStatus('online')
 				setIsInRoom(false) // will join again
 
-				// Clear auth errors since we're successfully reconnected
-				const { authError } = useCollaborationStore.getState()
-				if (authError.type !== 'jwt_secret_mismatch') {
-					clearAuthError()
-				}
+				// See the 'connect' handler above for why this is unconditional now.
+				clearAuthError()
 
 				// Reset room join tracking on reconnect
 				joinedRoomRef.current = null
