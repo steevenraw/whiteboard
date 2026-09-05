@@ -302,3 +302,98 @@ To run the websocket server in development:
 ```bash
 npm run server:watch
 ```
+
+---
+
+## À propos de ce fork (français)
+
+Ce dépôt est un fork personnel de l'app officielle Nextcloud Whiteboard, maintenu
+pour appliquer des patches non fusionnables en amont (fonctionnalités trop
+spécifiques, ou correctifs de bugs découverts en usage réel). Branche `main` =
+miroir de l'amont ; **`patch/miro-features`** = code réellement déployé en
+production, à partir du tag `v1.5.9`.
+
+### Patches appliqués (branche `patch/miro-features`)
+
+| Commit | Contenu |
+|---|---|
+| `60ba5c3` Panier A | Post-it en un clic, Vote/Minuteur/Présentation/Enregistrement promus en icônes visibles dans la barre d'outils, traductions FR complètes du menu |
+| `4c16954` Panier B | Post-it à texte riche (gras/souligné/couleur/taille) — implémenté en `embeddable` DOM (`src/components/RichStickyNote.tsx`), pas en élément texte natif Excalidraw (limite structurelle du moteur de rendu, voir historique de commit pour le détail des 8 bugs corrigés en le construisant) |
+| `57ba525` | Fix sync serveur silencieuse : un conflit 409 (verrou distribué, collision transitoire) était traité comme un succès déguisé (`syncWorker.ts`), et le filet de sécurité à la fermeture d'onglet exigeait à tort d'être le "syncer désigné" (`useSync.ts`) — combinaison qui pouvait bloquer une sauvegarde serveur indéfiniment sans aucune erreur visible |
+| `1a9a367` | Fix notification "Authentication Configuration Issue" qui restait affichée en permanence après un `jwt_secret_mismatch` détecté, même une fois la connexion réellement rétablie (`useCollaboration.ts`) |
+| `3df39f6` | Fix crash total post-déploiement : `manualChunks: { vendor: [...] }` dans `vite.config.ts` empêchait ce chunk de voir son hash refléter les imports dynamiques qu'il embarque, laissant les navigateurs pointer vers un chunk supprimé après un nouveau build (page blanche). Retiré + bump systématique de version d'app pour un cache-busting fiable de bout en bout (voir procédure de déploiement ci-dessous) |
+
+### Procédure de build et déploiement (patch local, pas de CI)
+
+Le code réel en prod vit sur le serveur (Docker/Unraid), pas via le store
+d'apps Nextcloud. Process complet pour tout futur patch :
+
+1. Cloner/mettre à jour le clone serveur sur la branche `patch/miro-features`.
+2. Patcher le code (`src/` pour le frontend React/TS, `lib/` pour le backend PHP,
+   `websocket_server/` pour le serveur de collaboration Node — **ce dernier
+   est bien dans ce dépôt**, ne pas supposer qu'il vit ailleurs).
+3. **Toujours bumper `<version>` dans `appinfo/info.xml`** (4ᵉ chiffre, ex.
+   `1.5.9.1` → `1.5.9.2`) — même pour un patch mineur. Sans ça, le fichier
+   d'entrée `whiteboard-main.mjs` reste exposé au cache long terme du
+   navigateur pour quiconque a déjà visité la page avant le déploiement (le
+   paramètre `?v=` que Nextcloud appose sur ce fichier est un hash basé sur
+   cette version déclarée, pas sur le contenu réel du fichier).
+4. Build : conteneur `node:24`, `npm ci && npm run build` (~1min30).
+5. **Backup de l'app en prod AVANT déploiement** (tar.gz du dossier complet).
+6. Déployer UNIQUEMENT les dossiers régénérés par le build (`js/`, `dist/`,
+   `css/`, `l10n/`) **et** `appinfo/info.xml` — ne jamais toucher `lib/`
+   (PHP), `vendor/` (composer), `img/`, `templates/`. `chown` vers l'UID du
+   conteneur Nextcloud (1000) après copie.
+7. **Forcer la resynchronisation de la version côté Nextcloud** — écraser le
+   fichier XML sur disque ne suffit pas, Nextcloud garde la version
+   "installée" en base :
+   ```bash
+   docker exec -u abc nextcloud php /app/www/public/occ config:app:set \
+     whiteboard installed_version --value='<nouvelle version>'
+   ```
+   Tant que ce n'est pas fait, `occ` refuse la plupart des commandes
+   ("Nextcloud or one of the apps require upgrade") — sans que le site web
+   lui-même soit affecté (`occ status` reste `maintenance: false`).
+8. Vérifier en conditions réelles (pas juste "ça compile") : ouvrir le
+   whiteboard, confirmer visuellement le rendu, vérifier l'absence
+   d'erreurs console (`TypeError: Failed to fetch dynamically imported
+   module` = symptôme du piège de cache ci-dessus revenu).
+9. Ne jamais réintroduire de `manualChunks` nommé dans `vite.config.ts` sans
+   retester spécifiquement qu'un changement d'un chunk qu'il référence
+   dynamiquement fait bien changer son propre hash.
+
+**Piège de transfert de fichiers Pandore ↔ PC Windows** : `scp` direct peut
+être bloqué selon le contexte d'exécution ; `ssh <hôte> "cat > fichier" <
+fichier_local` fonctionne, mais convertir les fins de ligne d'abord
+(`tr -d '\r' < fichier_windows | ssh ...`) sous peine de voir tout le fichier
+apparaître comme modifié dans `git diff` (CRLF vs LF), noyant le vrai diff.
+
+### Note sur le test de connexion admin
+
+La page `Réglages > Administration > Tableau blanc` peut afficher "Échec de
+la vérification de la connexion : websocket error" même quand la
+collaboration temps réel fonctionne parfaitement pour de vrais utilisateurs.
+**C'est documenté comme un faux négatif connu par l'amont** (voir plus haut
+dans ce README : *"Admin connectivity checks may show false negatives in
+Docker/proxy environments... don't affect actual functionality"*) — cohérent
+avec notre déploiement derrière Cloudflare. Ne pas chercher à "corriger" ce
+test sans une vraie preuve que la collaboration réelle est cassée (logs du
+conteneur `nextcloud-whiteboard-server` montrant de vraies connexions
+utilisateur réussies = collaboration OK, indépendamment de ce que dit cette
+page).
+
+### Gérer les mises à jour amont
+
+Pas de suivi automatique de `nextcloud/whiteboard` — mettre à jour seulement
+sur raison concrète (sécurité, fonctionnalité voulue). Le moment venu :
+"Sync fork" sur `main`, puis `git merge main` (pas de rebase, inutile pour un
+fork mono-contributeur déjà poussé) sur `patch/miro-features`. Conflits
+attendus par ordre de risque décroissant :
+- `l10n/fr.*` (régénéré par le bot Transifex amont à chaque release)
+- `src/hooks/useSync.ts`, `src/hooks/useCollaboration.ts`,
+  `src/workers/syncWorker.ts`, `vite.config.ts` (patchés ci-dessus — vérifier
+  si l'amont a corrigé les mêmes bugs différemment avant de réappliquer nos
+  fix par-dessus)
+- `src/App.tsx` (diff minuscule du panier A)
+- Fichiers propres au fork (`useQuickTools.tsx`, `RichStickyNote.tsx`, risque
+  quasi nul)
